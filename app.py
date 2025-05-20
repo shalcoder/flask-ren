@@ -12,7 +12,7 @@ app = Flask(__name__)
 Maps_API_KEY =  'AIzaSyDZuZ1sMCSJSyC_u-rbzHC8BvbIyzAgL3M'
 MAP_WIDTH = 320
 MAP_HEIGHT = 240
-MIN_REROUTE_METERS = 50 # Minimum distance moved to trigger a route recalculation
+MIN_REROUTE_METERS = 5 # Minimum distance moved to trigger a route recalculation
 
 # Global state for the current navigation route
 current_route = {
