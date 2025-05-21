@@ -10,7 +10,7 @@ app = Flask(__name__)
 
 # --- Configuration ---
 # IMPORTANT: Set this environment variable on Render!
-Maps_API_KEY = os.getenv("Maps_API_KEY") 
+Maps_API_KEY =  'AIzaSyDZuZ1sMCSJSyC_u-rbzHC8BvbIyzAgL3M'
 MAP_WIDTH = 480 # Increased for better visibility
 MAP_HEIGHT = 360 # Increased for better visibility
 MIN_REROUTE_METERS = 5 # Minimum distance moved to trigger a route recalculation (set to 5 for aggressive testing)
