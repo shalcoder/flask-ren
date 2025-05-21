@@ -4,49 +4,41 @@ import io
 from urllib.parse import quote_plus
 import re
 from geopy.distance import geodesic
-import os
 
 app = Flask(__name__)
 
 # --- Configuration ---
-# IMPORTANT: Set this environment variable on Render!
-Maps_API_KEY = 'AIzaSyDZuZ1sMCSJSyC_u-rbzHC8BvbIyzAgL3M'
-MAP_WIDTH = 480 # Increased for better visibility
-MAP_HEIGHT = 360 # Increased for better visibility
-MIN_REROUTE_METERS = 50 # Minimum distance moved to trigger a route recalculation
-# Advance step if user is within this distance of the step's END location
-THRESHOLD_METERS_TO_ADVANCE_STEP = 30 # Adjusted for better reliability. Can be fine-tuned.
+# Hardcoded Google Maps API key (for simplicity)
+GOOGLE_MAPS_API_KEY = 'AIzaSyDZuZ1sMCSJSyC_u-rbzHC8BvbIyzAgL3M'
+MAP_WIDTH = 480
+MAP_HEIGHT = 360
+MIN_REROUTE_METERS = 50
+THRESHOLD_METERS_TO_ADVANCE_STEP = 30
 
-# Global state for the current navigation route
 current_route = {
     'origin': None,
-    'last_routed_origin': None, # Stores the origin (lat, lng tuple) used for the last successful route calculation
+    'last_routed_origin': None,
     'destination': None,
     'steps': [],
-    'step_index': 0, # Current step being displayed/followed
+    'step_index': 0,
     'polyline': '',
-    'destination_reached': False # NEW FLAG: True when navigation is complete
+    'destination_reached': False
 }
 
-# --- Helper Functions ---
 def clean_html(raw_html):
     """Removes HTML tags from a string."""
     cleanr = re.compile('<.*?>')
     return re.sub(cleanr, '', raw_html)
 
 def update_route(origin_str, destination_str):
-    """
-    Fetches directions from Google Maps API and updates the current_route.
-    Returns True on success, False otherwise.
-    This function intelligently updates current_route['step_index'] based on user's current location.
-    """
-    directions_url = 'https://maps.googleapis.com/maps/api/directions/json'
+    directions_url = 'https://maps.googleapis.com/maps/api/directions/json '
     params = {
         'origin': origin_str,
         'destination': destination_str,
         'mode': 'driving',
-        'key': Maps_API_KEY
+        'key': GOOGLE_MAPS_API_KEY
     }
+
     try:
         response = requests.get(directions_url, params=params).json()
         if response['status'] != 'OK':
@@ -57,94 +49,69 @@ def update_route(origin_str, destination_str):
         for leg in response['routes'][0]['legs']:
             for step in leg['steps']:
                 start_loc = step['start_location']
-                end_loc = step['end_location'] # Store end_location for step advancement
+                end_loc = step['end_location']
                 instruction = clean_html(step['html_instructions'])
                 steps.append({
                     'lat': start_loc['lat'],
                     'lng': start_loc['lng'],
                     'instruction': instruction,
-                    'end_lat': end_loc['lat'], # Added
-                    'end_lng': end_loc['lng']  # Added
+                    'end_lat': end_loc['lat'],
+                    'end_lng': end_loc['lng']
                 })
 
-        # Preserve current step_index or find closest step in new route
         current_user_lat, current_user_lng = None, None
-        if origin_str and ',' in origin_str:
+        if ',' in origin_str:
             try:
                 current_user_lat, current_user_lng = map(float, origin_str.split(','))
             except ValueError:
-                pass # Invalid origin string, can't align step_index
+                pass
 
-        # Store previous step_index to potentially restore if new route is very short
-        old_step_index = current_route['step_index']
-
-        current_route['steps'] = steps
-        current_route['polyline'] = response['routes'][0]['overview_polyline']['points']
-        current_route['destination_reached'] = False # Reset this if a new route is calculated
+        min_dist = float('inf')
+        closest_step_index = 0
 
         if current_user_lat is not None and current_user_lng is not None:
-            min_dist = float('inf')
-            closest_step_index = 0 # Default to first step
-
-            # Find the step in the NEW route that is closest to the user's current location
-            for i, step in enumerate(current_route['steps']):
-                step_start_coords = (step['lat'], step['lng'])
-                dist = geodesic(step_start_coords, (current_user_lat, current_user_lng)).meters
+            for i, step in enumerate(steps):
+                step_coords = (step['lat'], step['lng'])
+                dist = geodesic(step_coords, (current_user_lat, current_user_lng)).meters
                 if dist < min_dist:
                     min_dist = dist
                     closest_step_index = i
-            
-            # If the new route is very short (e.g., 1 step) and we're already beyond the first step,
-            # ensure we don't try to access an invalid index
-            if closest_step_index >= len(current_route['steps']):
-                closest_step_index = max(0, len(current_route['steps']) - 1)
 
-            current_route['step_index'] = closest_step_index
-            print(f"Re-routing: Aligned step_index to {closest_step_index} (closest step was {min_dist:.2f}m away).")
+        current_route.update({
+            'steps': steps,
+            'polyline': response['routes'][0]['overview_polyline']['points'],
+            'step_index': closest_step_index,
+            'destination_reached': False
+        })
 
-        else:
-            current_route['step_index'] = 0 # Fallback if user origin not available
-            print("Re-routing: User origin not available, resetting step_index to 0.")
-
-        # Update last_routed_origin
-        if origin_str and ',' in origin_str:
+        if ',' in origin_str:
             try:
                 lat_orig, lng_orig = map(float, origin_str.split(','))
                 current_route['last_routed_origin'] = (lat_orig, lng_orig)
             except ValueError:
-                print(f"Warning: Could not parse origin '{origin_str}' for last_routed_origin.")
                 current_route['last_routed_origin'] = None
-        else:
-            current_route['last_routed_origin'] = None # Reset if origin is invalid/None
-        
-        print(f"Route updated: {len(steps)} steps from {origin_str} to {destination_str}. Current step_index: {current_route['step_index']}.")
+
+        print(f"Route updated: {len(steps)} steps. Starting at step {closest_step_index}.")
         return True
-    except requests.exceptions.RequestException as e:
-        print(f"Network error fetching directions: {e}")
-        return False
     except Exception as e:
-        print(f"An unexpected error occurred while updating route: {e}")
+        print(f"Error updating route: {e}")
         return False
 
-# --- Flask Routes ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    """Handles the main page, route planning, and initial setup."""
     if request.method == 'POST':
-        destination = request.form.get('destination')
-        if not destination:
-            return "Destination is required.", 400
-        current_route['destination'] = destination
+        dest = request.form.get('destination')
+        if not dest:
+            return "Destination required", 400
 
-        # Ensure origin is set before trying to calculate route
+        current_route['destination'] = dest
         if not current_route['origin']:
-            return "Origin not set yet from GPS. Please wait for GPS fix and resubmit.", 400
+            return "Origin not set yet. Please wait for GPS fix.", 400
 
-        success = update_route(current_route['origin'], destination)
+        success = update_route(current_route['origin'], dest)
         if not success:
-            return "Could not calculate route. Check destination and try again. Ensure API key is valid.", 500
+            return "Failed to calculate route. Check destination or try again later.", 500
 
-        # After a successful route calculation, render the navigation view
         return render_template_string('''
             <!doctype html>
             <html>
@@ -158,37 +125,28 @@ def index():
                     .instruction { font-size: 1.2em; font-weight: bold; margin-bottom: 10px; }
                 </style>
                 <script>
-                    // Client-side state variables
-                    let currentStepIndex = 0; 
+                    let currentStepIndex = 0;
                     let totalSteps = 0;
-                    let routeActive = true; 
+                    let routeActive = true;
 
-                    // Function to update map and instruction on the client
                     function updateNavigationUI(stepIndex, instruction, totalStepsFromAPI, status) {
                         if (status === 'Destination reached') {
                             document.getElementById('current-step-instruction').innerText = "You have arrived!";
-                            document.getElementById('step-counter').innerText = ""; // Clear step counter
-                            document.getElementById('map-image').src = ""; // Clear map
-                            routeActive = false; // Stop polling
+                            document.getElementById('step-counter').innerText = "";
+                            document.getElementById('map-image').src = "";
+                            routeActive = false;
                             return;
                         }
-
-                        // Update text elements
                         document.getElementById('current-step-instruction').innerText = instruction;
                         document.getElementById('step-counter').innerText = `Step ${stepIndex + 1} of ${totalStepsFromAPI}`;
-                        
-                        // Update map image with cache-buster
                         document.getElementById('map-image').src = `/map/${stepIndex}?_=${new Date().getTime()}`;
                     }
 
-                    // Polling for current step data
                     function pollCurrentStep() {
-                        if (!routeActive) return; // Stop polling if navigation is complete or reset
-
+                        if (!routeActive) return;
                         fetch('/current_step')
                             .then(res => {
-                                // If 404, implies no route or out of bounds, stop polling
-                                if (res.status === 404) { 
+                                if (res.status === 404) {
                                     routeActive = false;
                                     document.getElementById('current-step-instruction').innerText = "Navigation finished or route cleared.";
                                     document.getElementById('step-counter').innerText = "";
@@ -199,16 +157,15 @@ def index():
                             })
                             .then(data => {
                                 if (data) {
-                                    updateNavigationUI(data.step_index, data.instruction, data.total_steps, data.status); // Pass status from server
+                                    updateNavigationUI(data.step_index, data.instruction, data.total_steps, data.status);
                                 }
                             })
                             .catch(err => console.error("Error polling current step:", err));
                     }
 
-                    // Start polling when page loads
                     window.onload = function() {
-                        pollCurrentStep(); // Initial update when page loads
-                        setInterval(pollCurrentStep, 2000); // Poll every 2 seconds for updates
+                        pollCurrentStep();
+                        setInterval(pollCurrentStep, 2000);
                     };
                 </script>
             </head>
@@ -221,7 +178,7 @@ def index():
                     <p class="instruction" id="current-step-instruction">Loading next instruction...</p>
                 </div>
                 <div id="map-container">
-                    <img id="map-image" src="/map/{{ current_step_index }}" alt="Navigation Map"> 
+                    <img id="map-image" src="/map/{{ current_step_index }}" alt="Navigation Map">
                 </div>
                 <p><a href="/reset">Plan a new route</a></p>
             </body>
@@ -232,7 +189,6 @@ def index():
         current_step_index=current_route['step_index'],
         steps_count=len(current_route['steps']))
 
-    # Initial page to get user location and destination
     return render_template_string('''
         <!doctype html>
         <html>
@@ -240,139 +196,100 @@ def index():
             <title>Start Live Navigation</title>
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <script>
-            let lastKnownAccurateLocation = null; // Stores the best location found so far
+                let lastKnownAccurateLocation = null;
 
-            // Function to send location to Flask server
-            function sendLocation(lat, lng, accuracy, method) {
-                fetch('/update_location', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        lat: lat,
-                        lng: lng,
-                        accuracy: accuracy,
-                        method: method
-                    })
-                })
-                .then(res => res.json())
-                .then(data => {
-                    console.log("Location update acknowledged by server:", data);
-                })
-                .catch(err => console.error("Error sending location:", err));
-            }
-
-            // Function to get location from Google Geolocation API (fallback)
-            function getFallbackLocation() {
-                console.log("Attempting Google Geolocation API fallback...");
-                fetch('/get_fallback_location')
-                    .then(res => res.json())
-                    .then(data => {
-                        if (data.lat && data.lng) {
-                            console.log(`Fallback location (Google API): ${data.lat},${data.lng} (Accuracy: ${data.accuracy}m)`);
-                            const MIN_ACCEPTABLE_ACCURACY_FALLBACK = 1000; // e.g., 1km, discard very poor IP-based accuracy
-
-                            if (data.accuracy < MIN_ACCEPTABLE_ACCURACY_FALLBACK) {
-                                if (!lastKnownAccurateLocation || data.accuracy < lastKnownAccurateLocation.accuracy) {
-                                    sendLocation(data.lat, data.lng, data.accuracy, "google_api");
-                                    lastKnownAccurateLocation = {lat: data.lat, lng: data.lng, accuracy: data.accuracy};
-                                }
-                            } else {
-                                console.warn(`Discarding Google API fallback due to very low accuracy: ${data.accuracy}m`);
-                            }
-                        } else {
-                            console.error("Google fallback failed to return coordinates.");
-                        }
-                    })
-                    .catch(err => console.error("Error with Google Geolocation fallback:", err));
-            }
-
-            // Function to start getting location (using browser GPS primarily)
-            function startGettingLocation() {
-                if (!navigator.geolocation) {
-                    alert("Geolocation not supported by your browser. Navigation might not work reliably.");
-                    getFallbackLocation(); // Try fallback even if browser GPS is absent
-                    return;
+                function sendLocation(lat, lng, accuracy, method) {
+                    fetch('/update_location', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ lat: lat, lng: lng, accuracy: accuracy, method: method })
+                    }).then(res => res.json())
+                      .then(data => console.log("Server response:", data))
+                      .catch(err => console.error("Send error:", err));
                 }
 
-                // Use watchPosition for continuous updates
-                navigator.geolocation.watchPosition(
-                    pos => {
-                        const currentAccuracy = pos.coords.accuracy;
-                        const currentLat = pos.coords.latitude;
-                        const currentLng = pos.coords.longitude;
+                function getFallbackLocation() {
+                    fetch('/get_fallback_location')
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.lat && data.lng) {
+                                const MIN_ACCURACY = 1000;
+                                if (data.accuracy < MIN_ACCURACY) {
+                                    if (!lastKnownAccurateLocation || data.accuracy < lastKnownAccurateLocation.accuracy) {
+                                        sendLocation(data.lat, data.lng, data.accuracy, "google_api");
+                                        lastKnownAccurateLocation = { lat: data.lat, lng: data.lng, accuracy: data.accuracy };
+                                    }
+                                }
+                            }
+                        });
+                }
 
-                        console.log(`Browser GPS: ${currentLat},${currentLng} (Accuracy: ${currentAccuracy}m)`);
+                function startGettingLocation() {
+                    if (!navigator.geolocation) {
+                        alert("Geolocation not supported.");
+                        getFallbackLocation();
+                        return;
+                    }
 
-                        const MIN_MOVE_DISTANCE_FOR_UPDATE = 10; // meters (reduce for more frequent updates if needed)
-                        const MAX_ACCEPTABLE_ACCURACY_FOR_MOVE_UPDATE = 500; // meters
+                    navigator.geolocation.watchPosition(pos => {
+                        const lat = pos.coords.latitude;
+                        const lng = pos.coords.longitude;
+                        const accuracy = pos.coords.accuracy;
+
+                        const MIN_MOVE_DISTANCE = 10;
+                        const MAX_ACCURACY = 500;
 
                         let shouldSend = false;
-                        if (!lastKnownAccurateLocation) {
-                            shouldSend = true; // Always send the first location
-                        } else {
-                            const distanceMoved = geodesic(
-                                [lastKnownAccurateLocation.lat, lastKnownAccurateLocation.lng],
-                                [currentLat, currentLng]
-                            ).meters;
 
-                            // Send if accuracy is significantly better OR if moved a minimum distance AND accuracy is acceptable
-                            if (currentAccuracy < lastKnownAccurateLocation.accuracy * 0.8) { // 20% better accuracy
+                        if (!lastKnownAccurateLocation) {
+                            shouldSend = true;
+                        } else {
+                            const distanceMoved = geodesic([lastKnownAccurateLocation.lat, lastKnownAccurateLocation.lng], [lat, lng]).meters;
+                            if (accuracy < lastKnownAccurateLocation.accuracy * 0.8) {
                                 shouldSend = true;
-                            } else if (distanceMoved > MIN_MOVE_DISTANCE_FOR_UPDATE && currentAccuracy < MAX_ACCEPTABLE_ACCURACY_FOR_MOVE_UPDATE) {
+                            } else if (distanceMoved > MIN_MOVE_DISTANCE && accuracy < MAX_ACCURACY) {
                                 shouldSend = true;
                             }
                         }
 
                         if (shouldSend) {
-                            sendLocation(currentLat, currentLng, currentAccuracy, "browser_gps_watch");
-                            lastKnownAccurateLocation = {lat: currentLat, lng: currentLng, accuracy: currentAccuracy};
+                            sendLocation(lat, lng, accuracy, "browser_gps_watch");
+                            lastKnownAccurateLocation = { lat, lng, accuracy };
                         }
 
-                        // If browser GPS is low accuracy (e.g., > 50m), *also* try fallback in parallel.
-                        if (currentAccuracy > 50) {
-                            getFallbackLocation();
-                        }
-                    },
-                    err => {
-                        console.error("Browser GPS error:", err);
-                        // On any browser GPS error (permission denied, position unavailable), try fallback
+                        if (accuracy > 50) getFallbackLocation();
+
+                    }, err => {
+                        console.error("GPS error:", err);
                         getFallbackLocation();
-                    },
-                    {
+                    }, {
                         enableHighAccuracy: true,
                         timeout: 15000,
                         maximumAge: 0
-                    }
-                );
+                    });
 
-                // Periodically try fallback as a safety net
-                setInterval(getFallbackLocation, 30000); // Every 30 seconds
-            }
+                    setInterval(getFallbackLocation, 30000);
+                }
 
-            // Simple Haversine formula for geodesic distance (approximate, but fine for this use case)
-            function geodesic(coords1, coords2) {
-                const R = 6371e3; // metres (Earth's radius)
-                const φ1 = coords1[0] * Math.PI/180;
-                const φ2 = coords2[0] * Math.PI/180;
-                const Δφ = (coords2[0]-coords1[0]) * Math.PI/180;
-                const Δλ = (coords2[1]-coords1[1]) * Math.PI/180;
+                function geodesic(coords1, coords2) {
+                    const R = 6371e3;
+                    const φ1 = coords1[0] * Math.PI / 180;
+                    const φ2 = coords2[0] * Math.PI / 180;
+                    const Δφ = (coords2[0]-coords1[0]) * Math.PI / 180;
+                    const Δλ = (coords2[1]-coords1[1]) * Math.PI / 180;
+                    const a = Math.sin(Δφ/2)*Math.sin(Δφ/2) +
+                              Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)*Math.sin(Δλ/2);
+                    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                    return { meters: R * c };
+                }
 
-                const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-                          Math.cos(φ1) * Math.cos(φ2) *
-                          Math.sin(Δλ/2) * Math.sin(Δλ/2);
-                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-
-                const d = R * c; // in metres
-                return {meters: d};
-            }
-
-            window.onload = startGettingLocation;
+                window.onload = startGettingLocation;
             </script>
         </head>
         <body>
             <h2>Start Live Navigation</h2>
             <form method="POST">
-              <p>Your current location will be set from your GPS automatically.</p>
+              <p>Your location will be detected automatically.</p>
               Destination: <input name="destination" required><br><br>
               <input type="submit" value="Start Navigation">
             </form>
@@ -382,212 +299,122 @@ def index():
 
 @app.route('/update_location', methods=['POST'])
 def update_location():
-    """
-    Receives location updates from the client, sets the origin,
-    and handles route re-calculation and step advancement.
-    """
     data = request.get_json()
     lat = data.get('lat')
     lng = data.get('lng')
-    accuracy = data.get('accuracy', 'unknown')
-    method = data.get('method', 'unknown')
+    accuracy = data.get('accuracy')
+    method = data.get('method')
 
     if lat is None or lng is None:
-        return jsonify({'error': 'Invalid data, lat and lng required'}), 400
+        return jsonify({'error': 'Invalid data'}), 400
 
     new_origin_str = f"{lat},{lng}"
-    
-    # Store the most recent, reasonably accurate origin
     current_route['origin'] = new_origin_str
     print(f"[{method.upper()}] Location: {new_origin_str} (Accuracy: {accuracy}m)")
 
-    # --- Auto-advance Navigation Step ---
-    # Only try to advance if there's an active route and we haven't reached the end
     if current_route['steps'] and current_route['step_index'] < len(current_route['steps']):
-        current_step_target_end = current_route['steps'][current_route['step_index']]
-        # Use end_lat and end_lng for checking if we passed the step
-        end_step_coords = (current_step_target_end['end_lat'], current_step_target_end['end_lng'])
+        current_step = current_route['steps'][current_route['step_index']]
+        end_coords = (current_step['end_lat'], current_step['end_lng'])
         user_coords = (lat, lng)
+        distance = geodesic(end_coords, user_coords).meters
 
-        distance_to_end_of_step = geodesic(end_step_coords, user_coords).meters
-        
-        # If user is within THRESHOLD_METERS_TO_ADVANCE_STEP of the END of the current step
-        if distance_to_end_of_step < THRESHOLD_METERS_TO_ADVANCE_STEP:
-            # Check if it's not the very last step before incrementing
+        if distance < THRESHOLD_METERS_TO_ADVANCE_STEP:
             if current_route['step_index'] < len(current_route['steps']) - 1:
                 current_route['step_index'] += 1
-                print(f"Automatically advanced to step {current_route['step_index']}. Distance to end of previous step: {distance_to_end_of_step:.2f}m")
+                print(f"Advanced to step {current_route['step_index']} | Distance: {distance:.2f}m")
             else:
-                # Reached the last step, and now close to its end (which is destination)
-                print(f"Reached final destination! Distance to destination: {distance_to_end_of_step:.2f}m")
-                current_route['destination_reached'] = True 
-                # Optionally, clear route for new planning (commented out for now to allow 'You arrived' message to persist)
-                # current_route['origin'] = None
-                # current_route['destination'] = None
-                # current_route['steps'] = []
-                # current_route['polyline'] = ''
-                # current_route['step_index'] = 0 # Reset for future use, or -1 to signal finished.
-    else:
-        # This block is reached if no steps are loaded yet, or if navigation finished/reset.
-        if current_route.get('destination_reached'):
-            print("Navigation is complete.")
-        # No 'else' here, to avoid printing "No active steps for navigation" repeatedly if
-        # a route is just starting or hasn't been calculated yet.
+                current_route['destination_reached'] = True
+                print("Destination reached!")
 
-
-    # --- Dynamic Route Re-calculation ---
-    # This logic determines if a *new* route should be fetched from Google,
-    # typically due to significant deviation or as an initial calculation.
-    # This should ONLY happen if there is an active destination AND destination has NOT been reached
     if current_route['destination'] and not current_route['destination_reached']:
-        current_lat, current_lng = lat, lng
-
-        # Determine distance from the origin that was used for the LAST route calculation
         moved_distance = 0
         should_reroute = False
 
         if current_route['last_routed_origin'] is None:
-            # Initial route calculation or after a full reset/new destination
-            print("No last routed origin. Forcing initial route calculation.")
             should_reroute = True
         else:
-            last_routed_lat, last_routed_lng = current_route['last_routed_origin']
-            moved_distance = geodesic(
-                (last_routed_lat, last_routed_lng),
-                (current_lat, current_lng)
-            ).meters
-            
-            # Re-route if moved significantly OR if current step is out of sync/invalid
+            last_lat, last_lng = current_route['last_routed_origin']
+            moved_distance = geodesic((last_lat, last_lng), (lat, lng)).meters
             if moved_distance > MIN_REROUTE_METERS:
-                should_reroute = True
-                print(f"Moved {moved_distance:.2f}m from last route origin. Re-routing.")
-            elif current_route['step_index'] >= len(current_route['steps']):
-                # This could happen if current_route['steps'] was cleared or became empty
-                # while step_index was high, or if a very short route became invalid.
-                print("Current step index out of bounds for existing steps. Re-routing to re-align.")
                 should_reroute = True
 
         if should_reroute:
-            # If update_route is successful, it will reset current_route['step_index']
-            # to the closest step in the *new* route.
             if update_route(new_origin_str, current_route['destination']):
-                print("Route updated dynamically with new origin.")
+                print("Route updated dynamically.")
             else:
-                print("Failed to update route dynamically during re-route attempt.")
-        else:
-            print(f"Not re-routing. Moved only {moved_distance:.2f}m (min {MIN_REROUTE_METERS}m needed) or route is currently stable.")
+                print("Route update failed.")
 
-    return jsonify({'status': 'Location updated', 'method': method}), 200
+    return jsonify({'status': 'Location updated'}), 200
 
 @app.route('/get_fallback_location')
 def get_fallback_location():
-    """
-    Endpoint for client to request location from Google's Geolocation API.
-    Used as a fallback if browser GPS is unavailable or inaccurate.
-    """
-    geo_api_url = f"https://www.googleapis.com/geolocation/v1/geolocate?key={Maps_API_KEY}"
+    url = f"https://www.googleapis.com/geolocation/v1/geolocate?key= {GOOGLE_MAPS_API_KEY}"
     try:
-        response = requests.post(geo_api_url, json={"considerIp": True})
-        if response.status_code == 200:
-            data = response.json()
+        res = requests.post(url, json={"considerIp": True})
+        if res.status_code == 200:
+            data = res.json()
             return jsonify({
                 'lat': data['location']['lat'],
                 'lng': data['location']['lng'],
                 'accuracy': data['accuracy']
             })
-        else:
-            print(f"Google Geolocation API error: {response.status_code} - {response.text}")
-            return jsonify({'error': f'Google API error: {response.status_code}'}), 500
-    except requests.exceptions.RequestException as e:
-        print(f"Network error in geolocation fallback: {e}")
-        return jsonify({'error': 'Network error occurred'}), 500
+        return jsonify({'error': 'Google API error'}), 500
     except Exception as e:
-        print(f"An unexpected error occurred in geolocation fallback: {e}")
-        return jsonify({'error': 'Exception occurred'}), 500
+        print(e)
+        return jsonify({'error': 'Network error'}), 500
 
-@app.route('/map/<int:step_index>') 
+@app.route('/map/<int:step_index>')
 def step_map(step_index):
-    """
-    Generates and serves a static map image for a specific step in the route.
-    """
-    # If destination reached, clear map or show a static arrival map
     if current_route.get('destination_reached'):
-        # You could return a specific 'destination reached' map here,
-        # or just an empty response if the client clears the image.
-        # For now, if the client clears the image source, this won't be called.
-        # If it is called, we can return a default blank or 'arrived' image.
-        print("Map requested for destination reached state. Returning blank or arrival map.")
-        # Example: return a transparent GIF or a custom "arrived" image
-        # For simplicity, if the client clears the src, this route won't be hit for the main nav map.
         return send_file(io.BytesIO(b'\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x00\x00\x00\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00\x44\x01\x00\x3b'), mimetype='image/gif')
 
     if not current_route['steps'] or step_index < 0 or step_index >= len(current_route['steps']):
-        print(f"Map request for invalid step_index: {step_index}. Total steps: {len(current_route['steps'])}. No active route or invalid step.")
-        # Return a blank map or error
-        return "No active route or invalid step for map.", 404
+        return "No active route", 404
 
-    location = current_route['steps'][step_index]
-    lat = location['lat']
-    lng = location['lng']
+    loc = current_route['steps'][step_index]
+    lat, lng = loc['lat'], loc['lng']
     polyline = current_route['polyline']
 
-    base_url = "https://maps.googleapis.com/maps/api/staticmap"
+    base_url = "https://maps.googleapis.com/maps/api/staticmap "
     params = {
         'size': f'{MAP_WIDTH}x{MAP_HEIGHT}',
-        'zoom': '17', # Adjusted zoom for better context
-        'center': f'{lat},{lng}', # Center on the start of the current step
-        'path': f'color:0xff0000ff|weight:5|enc:{polyline}', # Red polyline for the route
+        'zoom': '17',
+        'center': f'{lat},{lng}',
+        'path': f'color:0xff0000ff|weight:5|enc:{polyline}',
         'format': 'jpg-baseline',
-        'key': Maps_API_KEY
+        'key': GOOGLE_MAPS_API_KEY
     }
 
-    # Add markers for the current step and the destination
-    markers = [
-        f'markers=color:blue|label:{step_index+1}|{lat},{lng}', # Current step marker (blue)
-    ]
-    # Add destination marker if it's not the current step's end location
+    markers = [f'markers=color:blue|label:{step_index+1}|{lat},{lng}']
     if current_route['destination']:
-        # Only add destination marker if it's different from the current step's end
-        # or if it's the last step and we want to highlight the final point.
-        # For simplicity, always add the destination marker.
         markers.append(f'markers=color:red|label:E|{current_route["destination"]}')
-
 
     query = '&'.join([f'{k}={quote_plus(str(v))}' for k, v in params.items()])
     marker_query = '&'.join(markers)
     full_url = f"{base_url}?{query}&{marker_query}"
 
     try:
-        response = requests.get(full_url)
-        if response.status_code != 200:
-            print(f"Failed to fetch map image: {response.status_code} - {response.content.decode()}")
-            return f"Failed to fetch map image: {response.status_code}", 500
-        return send_file(io.BytesIO(response.content), mimetype='image/jpeg')
-    except requests.exceptions.RequestException as e:
-        print(f"Network error fetching map image: {e}")
-        return "Network error fetching map image", 500
+        res = requests.get(full_url)
+        if res.status_code == 200:
+            return send_file(io.BytesIO(res.content), mimetype='image/jpeg')
+        return "Map fetch failed", 500
     except Exception as e:
-        print(f"An unexpected error occurred while fetching map: {e}")
-        return "An unexpected error occurred", 500
-
+        print(e)
+        return "Map fetch error", 500
 
 @app.route('/current_step')
 def current_step():
-    """Returns JSON data for the current navigation step."""
-    # Check if destination reached first
     if current_route.get('destination_reached'):
         return jsonify({
             'status': 'Destination reached',
             'instruction': 'You have arrived!',
-            'step_index': len(current_route['steps']) -1 , # Point to the last step's index
+            'step_index': len(current_route['steps']) - 1,
             'total_steps': len(current_route['steps'])
-        }), 200
+        })
 
     i = current_route['step_index']
-    
     if not current_route['steps'] or i < 0 or i >= len(current_route['steps']):
-        # No active route or beyond last valid step
-        return jsonify({'error': 'No active route or navigation finished'}), 404
+        return jsonify({'error': 'No active route'}), 404
 
     step_data = current_route['steps'][i]
     return jsonify({
@@ -596,21 +423,21 @@ def current_step():
         'lng': step_data['lng'],
         'instruction': step_data['instruction'],
         'total_steps': len(current_route['steps']),
-        'status': 'Navigating' # Indicate normal navigation state
+        'status': 'Navigating'
     })
 
 @app.route('/reset')
 def reset():
-    """Resets the current navigation route."""
-    current_route['origin'] = None
-    current_route['last_routed_origin'] = None
-    current_route['destination'] = None
-    current_route['steps'] = []
-    current_route['step_index'] = 0
-    current_route['polyline'] = ''
-    current_route['destination_reached'] = False # Reset this flag
-    return "Route reset successfully. <a href='/'>Start a new one</a>"
+    current_route.update({
+        'origin': None,
+        'last_routed_origin': None,
+        'destination': None,
+        'steps': [],
+        'step_index': 0,
+        'polyline': '',
+        'destination_reached': False
+    })
+    return "Route reset. <a href='/'>New route</a>"
 
-# The if __name__ == "__main__": block is typically removed or commented out for Gunicorn deployment
-# if __name__ == "__main__":
-#     app.run(debug=True)
+if __name__ == "__main__":
+    app.run(debug=True)
