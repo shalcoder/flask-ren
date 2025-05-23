@@ -15,12 +15,12 @@ app = Flask(__name__)
 Maps_API_KEY = os.getenv("Maps_API_KEY") # Ensure this matches the env var name on Render
 # Maps_API_KEY = "YOUR_Maps_API_KEY_HERE" # Uncomment for local testing if not using env var
 
-MAP_WIDTH = 480 # Increased for better visibility
-MAP_HEIGHT = 360 # Increased for better visibility
+MAP_WIDTH = 320 # Increased for better visibility
+MAP_HEIGHT = 240 # Increased for better visibility
 # --- ADJUST THESE VALUES FOR TESTING ---
-MIN_REROUTE_METERS = 200 # *** Increased! *** Minimum distance moved to trigger a route recalculation
+MIN_REROUTE_METERS = 20 # *** Increased! *** Minimum distance moved to trigger a route recalculation
 # Advance step if user is within this distance of the step's END location
-THRESHOLD_METERS_TO_ADVANCE_STEP = 30 # Adjusted for better reliability. Can be fine-tuned.
+THRESHOLD_METERS_TO_ADVANCE_STEP = 10 # Adjusted for better reliability. Can be fine-tuned.
 
 # Global state for the current navigation route
 current_route = {
