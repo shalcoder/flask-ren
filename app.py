@@ -12,7 +12,7 @@ app = Flask(__name__)
 # IMPORTANT: Set this environment variable on Render!
 # For local testing, you can uncomment the line below and set your key directly,
 # but for deployment on Render, it's safer to use os.getenv()
-Maps_API_KEY = os.getenv("Maps_API_KEY") # Ensure this matches the env var name on Render
+Maps_API_KEY = 'AIzaSyDZuZ1sMCSJSyC_u-rbzHC8BvbIyzAgL3M' # Ensure this matches the env var name on Render
 # Maps_API_KEY = "YOUR_Maps_API_KEY_HERE" # Uncomment for local testing if not using env var
 
 MAP_WIDTH = 320 # Increased for better visibility
