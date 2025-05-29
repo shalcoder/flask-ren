@@ -130,6 +130,19 @@ def index():
                         font-size: 0.9em;
                         color: #6c757d;
                     }
+                    .live-indicator {
+                        display: inline-block;
+                        width: 8px;
+                        height: 8px;
+                        background-color: #28a745;
+                        border-radius: 50%;
+                        margin-right: 5px;
+                        animation: pulse 2s ease-in-out infinite alternate;
+                    }
+                    @keyframes pulse {
+                        from { opacity: 1; }
+                        to { opacity: 0.5; }
+                    }
                     @media (max-width: 768px) {
                         .container {
                             padding: 0 15px;
@@ -146,6 +159,9 @@ def index():
                 <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
                     <div class="container">
                         <a class="navbar-brand" href="/">Route Navigator</a>
+                        <span class="text-light">
+                            <span class="live-indicator"></span>Live Navigation
+                        </span>
                         <a href="/" class="btn btn-light ms-auto">Plan New Route</a>
                     </div>
                 </nav>
@@ -190,7 +206,7 @@ def index():
                                     <h5 class="mb-0">Route Summary</h5>
                                 </div>
                                 <div class="card-body">
-                                    <p><strong>Origin:</strong> {{ origin }}</p>
+                                    <p><strong>Origin:</strong> <span id="currentOrigin">{{ origin }}</span></p>
                                     <p><strong>Destination:</strong> {{ destination }}</p>
                                 </div>
                             </div>
@@ -201,7 +217,9 @@ def index():
                 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
                 <script>
                     let currentStep = 0;
-                    const totalSteps = {{ steps_count }};
+                    let totalSteps = {{ steps_count }};
+                    let updateInterval;
+                    let manualNavigation = false; // Track if user is manually navigating
                     
                     // Initialize progress bar
                     updateProgress();
@@ -211,24 +229,37 @@ def index():
                             .then(response => response.json())
                             .then(data => {
                                 if (!data.error) {
-                                    document.getElementById('currentStepNum').textContent = data.step_index + 1;
+                                    // Update current step if it changed from server (automatic advancement)
+                                    if (currentStep !== data.step_index && !manualNavigation) {
+                                        currentStep = data.step_index;
+                                    }
+                                    
+                                    document.getElementById('currentStepNum').textContent = currentStep + 1;
                                     document.getElementById('stepInstruction').textContent = data.instruction;
-                                    document.getElementById('mapImage').src = `/map/${data.step_index}?t=${Date.now()}`;
+                                    
+                                    // Update map with cache-busting timestamp for continuous updates
+                                    const timestamp = new Date().getTime();
+                                    document.getElementById('mapImage').src = `/map/${currentStep}?t=${timestamp}`;
+                                    
                                     updateProgress();
                                     
                                     // Enable/disable navigation buttons
-                                    document.getElementById('prevStep').disabled = data.step_index === 0;
-                                    document.getElementById('nextStep').disabled = data.step_index === totalSteps - 1;
+                                    document.getElementById('prevStep').disabled = currentStep === 0;
+                                    document.getElementById('nextStep').disabled = currentStep === totalSteps - 1;
                                     
                                     // Fetch step details for distance/duration
-                                    fetchStepDetails(data.step_index);
+                                    fetchStepDetails(currentStep);
+                                    
+                                    // Update current origin display
+                                    if (data.origin) {
+                                        document.getElementById('currentOrigin').textContent = data.origin;
+                                    }
                                 }
-                            });
+                            })
+                            .catch(err => console.error('Error updating step display:', err));
                     }
                     
                     function fetchStepDetails(stepIndex) {
-                        // This would be more efficient if we included all data in the initial render
-                        // For now we'll fetch it separately
                         fetch('/step_details/' + stepIndex)
                             .then(response => response.json())
                             .then(data => {
@@ -238,28 +269,32 @@ def index():
                                 if (data.duration) {
                                     document.getElementById('stepDuration').textContent = data.duration;
                                 }
-                            });
+                            })
+                            .catch(err => console.error('Error fetching step details:', err));
                     }
                     
                     function updateProgress() {
-                              const progress = ((currentStep + 1) / totalSteps) * 100;
-                              document.getElementById('progressBar').style.width = `${progress}%`;
-                        }
-
-                   
-                  
-                     
+                        const progress = ((currentStep + 1) / totalSteps) * 100;
+                        document.getElementById('progressBar').style.width = `${progress}%`;
+                    }
+                    
                     function nextStep() {
                         if (currentStep < totalSteps - 1) {
                             currentStep++;
+                            manualNavigation = true;
                             updateStepDisplay();
+                            // Reset manual navigation flag after a delay
+                            setTimeout(() => { manualNavigation = false; }, 2000);
                         }
                     }
                     
                     function prevStep() {
                         if (currentStep > 0) {
                             currentStep--;
+                            manualNavigation = true;
                             updateStepDisplay();
+                            // Reset manual navigation flag after a delay
+                            setTimeout(() => { manualNavigation = false; }, 2000);
                         }
                     }
                     
@@ -279,14 +314,59 @@ def index():
                             .then(blob => {
                                 const url = URL.createObjectURL(blob);
                                 img.src = url;
-                            });
+                            })
+                            .catch(err => console.error('Error panning map:', err));
                     }
                     
-                    // Check for step updates periodically (for automatic advancement)
-                    setInterval(updateStepDisplay, 5000);
-                    window.onload = updateStepDisplay;
-                    // Initialize with current step from server
-                    updateStepDisplay();
+                    function startContinuousUpdates() {
+                        // Update every 5 seconds for live navigation
+                        updateInterval = setInterval(updateStepDisplay, 5000);
+                    }
+                    
+                    function stopContinuousUpdates() {
+                        if (updateInterval) {
+                            clearInterval(updateInterval);
+                        }
+                    }
+                    
+                    // Start location tracking like in flaskapp.py
+                    function startLocationTracking() {
+                        if (!navigator.geolocation) {
+                            console.warn("Geolocation not supported.");
+                            return;
+                        }
+                        
+                        navigator.geolocation.watchPosition(pos => {
+                            fetch('/update_location', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({
+                                    lat: pos.coords.latitude,
+                                    lng: pos.coords.longitude,
+                                    accuracy: pos.coords.accuracy,
+                                    method: 'browser_gps_watch'
+                                })
+                            }).catch(err => console.error('Error updating location:', err));
+                        }, err => {
+                            console.error('Geolocation error:', err);
+                        }, {
+                            enableHighAccuracy: true,
+                            timeout: 10000,
+                            maximumAge: 5000
+                        });
+                    }
+                    
+                    // Initialize everything when page loads
+                    window.addEventListener('load', function() {
+                        updateStepDisplay(); // Initial update
+                        startContinuousUpdates(); // Start 5-second updates
+                        startLocationTracking(); // Start GPS tracking
+                    });
+                    
+                    // Clean up interval when page unloads
+                    window.addEventListener('beforeunload', function() {
+                        stopContinuousUpdates();
+                    });
                 </script>
             </body>
             </html>
@@ -536,12 +616,20 @@ def step_map(step):
         'path': f'color:0xff0000ff|weight:5|enc:{polyline}',
         'format': 'jpg-baseline',
         'key': GOOGLE_MAPS_API_KEY,
-        'maptype': 'roadmap',
-        'markers': f'color:blue|label:{step+1}|{lat},{lng}',
-        'markers': f'color:red|label:E|{current_route["destination"]}'
+        'maptype': 'roadmap'
     }
 
-    response = requests.get(base_url, params=params)
+    # Add markers separately to avoid URL parameter conflicts
+    markers = [
+        f'markers=color:blue|label:{step+1}|{lat},{lng}',
+        f'markers=color:red|label:E|{current_route["destination"]}'
+    ]
+
+    query = '&'.join([f'{k}={quote_plus(str(v))}' for k, v in params.items()])
+    marker_query = '&'.join(markers)
+    full_url = f"{base_url}?{query}&{marker_query}"
+
+    response = requests.get(full_url)
     if response.status_code != 200:
         return f"Failed to fetch map image: {response.content}", 500
 
@@ -567,8 +655,8 @@ def pan_map(step):
     
     # Simple approximation for panning (1 degree ~= 111km)
     # Adjust these values to change pan sensitivity
-    lat_adjust = 0.02 * y_offset  # Negative because y increases downward
-    lng_adjust = 0.02 * x_offset
+    lat_adjust = 0.002 * y_offset  # Reduced for finer control
+    lng_adjust = 0.002 * x_offset
     
     new_lat = lat - lat_adjust
     new_lng = lng + lng_adjust
@@ -581,12 +669,20 @@ def pan_map(step):
         'path': f'color:0xff0000ff|weight:5|enc:{current_route["polyline"]}',
         'format': 'jpg-baseline',
         'key': GOOGLE_MAPS_API_KEY,
-        'maptype': 'roadmap',
-        'markers': f'color:blue|label:{step+1}|{lat},{lng}',
-        'markers': f'color:red|label:E|{current_route["destination"]}'
+        'maptype': 'roadmap'
     }
 
-    response = requests.get(base_url, params=params)
+    # Add markers separately
+    markers = [
+        f'markers=color:blue|label:{step+1}|{lat},{lng}',
+        f'markers=color:red|label:E|{current_route["destination"]}'
+    ]
+
+    query = '&'.join([f'{k}={quote_plus(str(v))}' for k, v in params.items()])
+    marker_query = '&'.join(markers)
+    full_url = f"{base_url}?{query}&{marker_query}"
+
+    response = requests.get(full_url)
     if response.status_code != 200:
         return f"Failed to fetch map image: {response.content}", 500
 
@@ -615,7 +711,8 @@ def current_step():
         'lat': step_data['lat'],
         'lng': step_data['lng'],
         'instruction': step_data['instruction'],
-        'total_steps': len(current_route['steps'])
+        'total_steps': len(current_route['steps']),
+        'origin': current_route['origin']
     })
 
 @app.route('/reset')
