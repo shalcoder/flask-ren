@@ -5,7 +5,8 @@ from urllib.parse import quote_plus
 import socket
 import re
 from geopy.distance import geodesic
-import logging # Import the logging module
+import logging
+import os # For environment variables
 
 app = Flask(__name__)
 
@@ -43,10 +44,12 @@ def update_route(origin, destination):
         'key': GOOGLE_MAPS_API_KEY,
         'alternatives': 'true' # Request alternative routes
     }
+    app.logger.info(f"Requesting directions from {origin} to {destination} with mode: {params['mode']}")
     response = requests.get(directions_url, params=params).json()
     
     if response.get('status') != 'OK':
-        app.logger.error(f"Failed to fetch directions. Status: {response.get('status')}. Response: {response}")
+        # Include travel mode in error logging
+        app.logger.error(f"Failed to fetch directions. Status: {response.get('status')}. Mode: {params['mode']}. Response: {response}")
         return False
 
     steps = []
@@ -630,11 +633,19 @@ def index():
 
                 function onPlaceChanged() {
                     const place = autocomplete.getPlace();
+                    const destinationInput = document.getElementById('destination'); // Get the input element
+
                     if (!place.geometry) {
-                        console.warn("Autocomplete: No details available for input: '" + place.name + "'");
+                        // User entered the name of a Place that was not suggested,
+                        // or pressed the Enter key, or the Place Details request failed.
+                        // Or the input was cleared after a selection.
+                        console.warn("Autocomplete: No geometry available for input: '" + (place.name || destinationInput.value) + "'. User's raw input will be used.");
+                        // The input field will retain what the user typed or cleared.
                     } else {
-                        console.log("Autocomplete: Place selected - ", place.formatted_address);
-                        // The input field's value is automatically updated by the widget.
+                        // Place was selected from suggestions. Update the input field's value.
+                        destinationInput.value = place.formatted_address;
+                        console.log("Autocomplete: Place selected and input updated to - ", place.formatted_address);
+                        // You could also store place.place_id in a hidden field if your backend needs it.
                     }
                 }
                 
@@ -644,8 +655,6 @@ def index():
         </body>
         </html>
     ''')
-    # Pass the API key to the template for the Google Maps script
-    return render_template_string(html_template, GOOGLE_MAPS_API_KEY=GOOGLE_MAPS_API_KEY)
 @app.route('/update_location', methods=['POST'])
 def update_location():
     data = request.get_json()
