@@ -10,6 +10,7 @@ import os # For environment variables
 
 app = Flask(__name__)
 
+# Load API key from environment variable for security and flexibility
 GOOGLE_MAPS_API_KEY = 'AIzaSyDZuZ1sMCSJSyC_u-rbzHC8BvbIyzAgL3M'
 MAP_WIDTH = 800  
 MAP_HEIGHT = 400
@@ -48,7 +49,7 @@ def update_route(origin, destination):
     response = requests.get(directions_url, params=params).json()
     
     if response.get('status') != 'OK':
-        # Include travel mode in error logging
+        current_route['last_directions_error_status'] = response.get('status') # Store error status
         app.logger.error(f"Failed to fetch directions. Status: {response.get('status')}. Mode: {params['mode']}. Response: {response}")
         return False
 
@@ -109,7 +110,15 @@ def index():
 
         success = update_route(current_route['origin'], destination)
         if not success:
-            return "Could not calculate route. Check destination and try again.", 500
+            # Provide more specific feedback if possible
+            error_status = current_route.get('last_directions_error_status', 'UNKNOWN')
+            user_message = "Could not calculate route. Please check the destination and try again."
+            if error_status == 'NOT_FOUND':
+                user_message = "The destination address could not be found by Google Maps. Please check the address."
+            elif error_status == 'ZERO_RESULTS':
+                user_message = f"No routes could be found for the destination with travel mode: {current_route['travel_mode']}."
+            
+            return user_message, 500
 
         return render_template_string('''
             <!DOCTYPE html>
