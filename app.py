@@ -2,13 +2,14 @@ from flask import Flask, request, jsonify, render_template_string, send_file
 import requests
 import io
 from urllib.parse import quote_plus
+import socket
 import re
 from geopy.distance import geodesic
 
 app = Flask(__name__)
 
 GOOGLE_MAPS_API_KEY = 'AIzaSyDZuZ1sMCSJSyC_u-rbzHC8BvbIyzAgL3M'
-MAP_WIDTH = 800  # Increased for better visibility
+MAP_WIDTH = 800  # Increased for better visibility like Render_Code.py
 MAP_HEIGHT = 400
 
 current_route = {
@@ -139,10 +140,17 @@ def index():
                         padding: 5px 10px;
                         border-radius: 15px;
                         font-size: 0.8em;
-                        z-index: 1000;
+                        display: flex;
+                        align-items: center;
+                        gap: 5px;
                     }
-                    .live-update-indicator.updating {
-                        background: rgba(40, 167, 69, 0.9);
+                    .pulse {
+                        animation: pulse 2s infinite;
+                    }
+                    @keyframes pulse {
+                        0% { opacity: 1; }
+                        50% { opacity: 0.5; }
+                        100% { opacity: 1; }
                     }
                     @media (max-width: 768px) {
                         .container {
@@ -168,7 +176,10 @@ def index():
                     <div class="row">
                         <div class="col-lg-8">
                             <div class="map-container">
-                                <div id="liveUpdateIndicator" class="live-update-indicator">Live Updates</div>
+                                <div class="live-update-indicator">
+                                    <i class="fas fa-satellite-dish pulse"></i>
+                                    Live Tracking
+                                </div>
                                 <img id="mapImage" src="/map/0" alt="Step 1 Map" class="map-img" 
                                      onclick="handleMapClick(event)">
                             </div>
@@ -205,7 +216,7 @@ def index():
                                     <h5 class="mb-0">Route Summary</h5>
                                 </div>
                                 <div class="card-body">
-                                    <p><strong>Origin:</strong> {{ origin }}</p>
+                                    <p><strong>Origin:</strong> <span id="originDisplay">{{ origin }}</span></p>
                                     <p><strong>Destination:</strong> {{ destination }}</p>
                                 </div>
                             </div>
@@ -217,54 +228,64 @@ def index():
                 <script>
                     let currentStep = 0;
                     const totalSteps = {{ steps_count }};
-                    let manualNavigation = false; // Flag to track manual navigation
+                    let trackingInterval;
                     
                     // Initialize progress bar
                     updateProgress();
                     
-                    function updateStepDisplay() {
-                        const indicator = document.getElementById('liveUpdateIndicator');
-                        indicator.classList.add('updating');
-                        indicator.textContent = 'Updating...';
+                    // Start GPS tracking like flaskapp.py
+                    function startTracking() {
+                        if (!navigator.geolocation) {
+                            alert("Geolocation not supported.");
+                            return;
+                        }
                         
-                        fetch('/current_step')
-                            .then(response => response.json())
-                            .then(data => {
-                                if (!data.error) {
-                                    // Update current step from server (this handles automatic advancement)
-                                    currentStep = data.step_index;
-                                    
-                                    document.getElementById('currentStepNum').textContent = currentStep + 1;
-                                    document.getElementById('stepInstruction').textContent = data.instruction;
-                                    
-                                    // Update map image with timestamp to force refresh - KEY ADDITION FROM flaskapp.py
-                                    const timestamp = new Date().getTime();
-                                    document.getElementById('mapImage').src = `/map/${currentStep}?t=${timestamp}`;
-                                    
-                                    updateProgress();
-                                    
-                                    // Enable/disable navigation buttons
-                                    document.getElementById('prevStep').disabled = currentStep === 0;
-                                    document.getElementById('nextStep').disabled = currentStep === totalSteps - 1;
-                                    
-                                    // Fetch step details for distance/duration
-                                    fetchStepDetails(currentStep);
-                                }
-                                
-                                // Reset indicator
-                                setTimeout(() => {
-                                    indicator.classList.remove('updating');
-                                    indicator.textContent = 'Live Updates';
-                                }, 500);
-                            })
-                            .catch(error => {
-                                console.error('Error updating step:', error);
-                                indicator.classList.remove('updating');
-                                indicator.textContent = 'Update Error';
-                                setTimeout(() => {
-                                    indicator.textContent = 'Live Updates';
-                                }, 2000);
+                        // Watch position for real-time updates
+                        navigator.geolocation.watchPosition(pos => {
+                            fetch('/update_location', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({
+                                    lat: pos.coords.latitude,
+                                    lng: pos.coords.longitude
+                                })
                             });
+                        }, err => {
+                            console.error("GPS tracking error:", err);
+                        }, {
+                            enableHighAccuracy: true,
+                            timeout: 10000,
+                            maximumAge: 0
+                        });
+                        
+                        // Update display every 5 seconds like flaskapp.py
+                        trackingInterval = setInterval(() => {
+                            fetch('/current_step')
+                                .then(response => response.json())
+                                .then(data => {
+                                    if (!data.error) {
+                                        currentStep = data.step_index;
+                                        document.getElementById('currentStepNum').textContent = data.step_index + 1;
+                                        document.getElementById('stepInstruction').textContent = data.instruction;
+                                        
+                                        // Update map image with timestamp to force refresh like flaskapp.py
+                                        document.getElementById('mapImage').src = `/map/${data.step_index}?t=${new Date().getTime()}`;
+                                        
+                                        // Update origin display with current coordinates
+                                        document.getElementById('originDisplay').textContent = `(${data.lat.toFixed(5)}, ${data.lng.toFixed(5)})`;
+                                        
+                                        updateProgress();
+                                        
+                                        // Enable/disable navigation buttons
+                                        document.getElementById('prevStep').disabled = data.step_index === 0;
+                                        document.getElementById('nextStep').disabled = data.step_index === totalSteps - 1;
+                                        
+                                        // Fetch step details for distance/duration
+                                        fetchStepDetails(data.step_index);
+                                    }
+                                })
+                                .catch(err => console.error('Error fetching step:', err));
+                        }, 5000); // 5 second updates like flaskapp.py
                     }
                     
                     function fetchStepDetails(stepIndex) {
@@ -278,9 +299,7 @@ def index():
                                     document.getElementById('stepDuration').textContent = data.duration;
                                 }
                             })
-                            .catch(error => {
-                                console.error('Error fetching step details:', error);
-                            });
+                            .catch(err => console.error('Error fetching step details:', err));
                     }
                     
                     function updateProgress() {
@@ -291,49 +310,34 @@ def index():
                     function nextStep() {
                         if (currentStep < totalSteps - 1) {
                             currentStep++;
-                            manualNavigation = true;
-                            
-                            // Update display immediately for manual navigation
-                            document.getElementById('currentStepNum').textContent = currentStep + 1;
-                            const timestamp = new Date().getTime();
-                            document.getElementById('mapImage').src = `/map/${currentStep}?t=${timestamp}`;
-                            updateProgress();
-                            
-                            // Enable/disable navigation buttons
-                            document.getElementById('prevStep').disabled = currentStep === 0;
-                            document.getElementById('nextStep').disabled = currentStep === totalSteps - 1;
-                            
-                            fetchStepDetails(currentStep);
-                            
-                            // Reset manual navigation flag after a short delay
-                            setTimeout(() => {
-                                manualNavigation = false;
-                            }, 2000);
+                            updateStepDisplay();
                         }
                     }
                     
                     function prevStep() {
                         if (currentStep > 0) {
                             currentStep--;
-                            manualNavigation = true;
-                            
-                            // Update display immediately for manual navigation
-                            document.getElementById('currentStepNum').textContent = currentStep + 1;
-                            const timestamp = new Date().getTime();
-                            document.getElementById('mapImage').src = `/map/${currentStep}?t=${timestamp}`;
-                            updateProgress();
-                            
-                            // Enable/disable navigation buttons
-                            document.getElementById('prevStep').disabled = currentStep === 0;
-                            document.getElementById('nextStep').disabled = currentStep === totalSteps - 1;
-                            
-                            fetchStepDetails(currentStep);
-                            
-                            // Reset manual navigation flag after a short delay
-                            setTimeout(() => {
-                                manualNavigation = false;
-                            }, 2000);
+                            updateStepDisplay();
                         }
+                    }
+                    
+                    function updateStepDisplay() {
+                        fetch('/current_step')
+                            .then(response => response.json())
+                            .then(data => {
+                                if (!data.error) {
+                                    document.getElementById('currentStepNum').textContent = data.step_index + 1;
+                                    document.getElementById('stepInstruction').textContent = data.instruction;
+                                    document.getElementById('mapImage').src = `/map/${data.step_index}?t=${new Date().getTime()}`;
+                                    updateProgress();
+                                    
+                                    // Enable/disable navigation buttons
+                                    document.getElementById('prevStep').disabled = data.step_index === 0;
+                                    document.getElementById('nextStep').disabled = data.step_index === totalSteps - 1;
+                                    
+                                    fetchStepDetails(data.step_index);
+                                }
+                            });
                     }
                     
                     function handleMapClick(event) {
@@ -353,47 +357,26 @@ def index():
                                 const url = URL.createObjectURL(blob);
                                 img.src = url;
                             })
-                            .catch(error => {
-                                console.error('Error panning map:', error);
-                            });
+                            .catch(err => console.error('Error panning map:', err));
                     }
                     
-                    // Auto-update every 5 seconds - KEY ADDITION FROM flaskapp.py
-                    setInterval(() => {
-                        if (!manualNavigation) {  // Only auto-update if not manually navigating
-                            updateStepDisplay();
+                    function resetRoute() {
+                        if (trackingInterval) {
+                            clearInterval(trackingInterval);
                         }
-                    }, 5000);
-                    
-                    // Initialize with current step from server
-                    updateStepDisplay();
-                    
-                    // Start GPS tracking like in flaskapp.py
-                    function startGPSTracking() {
-                        if (navigator.geolocation) {
-                            navigator.geolocation.watchPosition(position => {
-                                fetch('/update_location', {
-                                    method: 'POST',
-                                    headers: {'Content-Type': 'application/json'},
-                                    body: JSON.stringify({
-                                        lat: position.coords.latitude,
-                                        lng: position.coords.longitude,
-                                        accuracy: position.coords.accuracy,
-                                        method: 'browser_gps_watch'
-                                    })
-                                });
-                            }, error => {
-                                console.error("GPS tracking error:", error);
-                            }, {
-                                enableHighAccuracy: true,
-                                timeout: 10000,
-                                maximumAge: 0
-                            });
-                        }
+                        fetch('/reset').then(() => {
+                            window.location.href = '/';
+                        });
                     }
                     
-                    // Start GPS tracking when page loads
-                    startGPSTracking();
+                    // Start tracking when page loads
+                    window.addEventListener('load', startTracking);
+                    
+                    // Add reset button functionality
+                    document.querySelector('a[href="/"]').addEventListener('click', function(e) {
+                        e.preventDefault();
+                        resetRoute();
+                    });
                 </script>
             </body>
             </html>
@@ -480,61 +463,31 @@ def index():
             
             <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
             <script>
-                function sendLocation(lat, lng, accuracy, method) {
-                    const statusEl = document.getElementById('locationStatus');
-                    const statusText = document.getElementById('locationStatusText');
-                    
-                    fetch('/update_location', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            lat: lat,
-                            lng: lng,
-                            accuracy: accuracy,
-                            method: method
-                        })
-                    }).then(res => res.json()).then(data => {
-                        if (method === 'browser_gps_watch') return;
-                        
-                        statusEl.classList.add('active');
-                        statusEl.innerHTML = `<i class="fas fa-check-circle location-icon"></i> 
-                            Location detected (Accuracy: ${accuracy}m)`;
-                    }).catch(err => {
-                        statusText.textContent = 'Location detection failed. Using approximate location.';
-                    });
-                }
-
-                function fallbackToGoogleGeoAPI() {
-                    fetch('/get_fallback_location')
-                        .then(res => res.json())
-                        .then(data => {
-                            if (data.lat && data.lng) {
-                                sendLocation(data.lat, data.lng, data.accuracy, "google_api");
-                            } else {
-                                document.getElementById('locationStatusText').textContent = 
-                                    'Could not detect precise location. Navigation may be less accurate.';
-                            }
-                        });
-                }
-
                 function startGettingLocation() {
                     const statusEl = document.getElementById('locationStatus');
+                    const statusText = document.getElementById('locationStatusText');
                     
                     if (navigator.geolocation) {
                         navigator.geolocation.getCurrentPosition(
                             pos => {
-                                if (pos.coords.accuracy > 50) {
-                                    statusEl.innerHTML = `<i class="fas fa-exclamation-triangle location-icon"></i>
-                                        Low GPS accuracy. Trying to improve...`;
-                                    fallbackToGoogleGeoAPI();
-                                } else {
-                                    sendLocation(pos.coords.latitude, pos.coords.longitude, 
-                                                pos.coords.accuracy, "browser_gps");
-                                }
+                                fetch('/update_location', {
+                                    method: 'POST',
+                                    headers: {'Content-Type': 'application/json'},
+                                    body: JSON.stringify({
+                                        lat: pos.coords.latitude,
+                                        lng: pos.coords.longitude
+                                    })
+                                }).then(res => res.json()).then(data => {
+                                    statusEl.classList.add('active');
+                                    statusEl.innerHTML = `<i class="fas fa-check-circle location-icon"></i> 
+                                        Location detected (Accuracy: ${pos.coords.accuracy.toFixed(0)}m)`;
+                                }).catch(err => {
+                                    statusText.textContent = 'Location detection failed. Please try again.';
+                                });
                             },
                             err => {
                                 console.error("GPS failed:", err);
-                                fallbackToGoogleGeoAPI();
+                                statusText.textContent = 'Could not detect location. Please ensure GPS is enabled.';
                             },
                             {
                                 enableHighAccuracy: true,
@@ -542,22 +495,8 @@ def index():
                                 maximumAge: 0
                             }
                         );
-                        
-                        // Also watch position to update dynamically
-                        navigator.geolocation.watchPosition(position => {
-                            sendLocation(position.coords.latitude, position.coords.longitude, 
-                                        position.coords.accuracy, "browser_gps_watch");
-                        }, err => {
-                            console.error("Watch position error:", err);
-                        }, {
-                            enableHighAccuracy: true,
-                            timeout: 10000,
-                            maximumAge: 0
-                        });
                     } else {
-                        statusEl.innerHTML = `<i class="fas fa-exclamation-triangle location-icon"></i>
-                            Geolocation not supported by your browser. Using approximate location.`;
-                        fallbackToGoogleGeoAPI();
+                        statusText.textContent = 'Geolocation not supported by your browser.';
                     }
                 }
                 
@@ -573,9 +512,6 @@ def update_location():
     data = request.get_json()
     lat = data.get('lat')
     lng = data.get('lng')
-    accuracy = data.get('accuracy', 'unknown')
-    method = data.get('method', 'unknown')
-
     if lat is None or lng is None:
         return jsonify({'error': 'Invalid data, lat and lng required'}), 400
 
@@ -583,47 +519,29 @@ def update_location():
     origin_changed = (current_route['origin'] != new_origin)
     current_route['origin'] = new_origin
 
-    print(f"[{method.upper()}] Location: {new_origin} (Accuracy: {accuracy}m)")
+    print(f"Location updated: {new_origin}")
 
+    # Check if user is close to current step (auto-advance logic from flaskapp.py)
     if current_route['steps']:
         current_step = current_route['steps'][current_route['step_index']]
         step_coords = (current_step['lat'], current_step['lng'])
         user_coords = (lat, lng)
 
         distance = geodesic(step_coords, user_coords).meters
-        THRESHOLD_METERS = 15
-
-        if distance < THRESHOLD_METERS:
+        if distance < 15:  # 15 meter threshold like flaskapp.py
             if current_route['step_index'] < len(current_route['steps']) - 1:
                 current_route['step_index'] += 1
                 print(f"Automatically advanced to step {current_route['step_index']}")
 
-    if current_route['destination'] and origin_changed and method != "browser_gps_watch":
+    # Update route if origin changed (like flaskapp.py)
+    if current_route['destination'] and origin_changed:
         success = update_route(new_origin, current_route['destination'])
         if success:
             print("Route updated dynamically with new origin.")
         else:
             print("Failed to update route dynamically.")
 
-    return jsonify({'status': 'Location updated', 'method': method}), 200
-
-@app.route('/get_fallback_location')
-def get_fallback_location():
-    geo_api_url = f"https://www.googleapis.com/geolocation/v1/geolocate?key={GOOGLE_MAPS_API_KEY}"
-    try:
-        response = requests.post(geo_api_url, json={"considerIp": True})
-        if response.status_code == 200:
-            data = response.json()
-            return jsonify({
-                'lat': data['location']['lat'],
-                'lng': data['location']['lng'],
-                'accuracy': data['accuracy']
-            })
-        else:
-            return jsonify({'error': 'Google API error'}), 500
-    except Exception as e:
-        print("Error in geolocation fallback:", e)
-        return jsonify({'error': 'Exception occurred'}), 500
+    return jsonify({'status': 'Location updated'}), 200
 
 @app.route('/map/<int:step>')
 def step_map(step):
@@ -672,9 +590,8 @@ def pan_map(step):
     lat = location['lat']
     lng = location['lng']
     
-    # Simple approximation for panning (1 degree ~= 111km)
-    # Adjust these values to change pan sensitivity
-    lat_adjust = 0.02 * y_offset  # Negative because y increases downward
+    # Simple approximation for panning
+    lat_adjust = 0.02 * y_offset
     lng_adjust = 0.02 * x_offset
     
     new_lat = lat - lat_adjust
@@ -735,5 +652,10 @@ def reset():
     return "Route reset."
 
 if __name__ == '__main__':
-    #app.run(debug=True)
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    hostname = socket.gethostname()
+    try:
+        local_ip = socket.gethostbyname(hostname)
+    except:
+        local_ip = '127.0.0.1'
+    print(f"Flask server running at http://{local_ip}:5000")
+    app.run(host='0.0.0.0', port=5000)
