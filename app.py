@@ -24,8 +24,10 @@ current_route = {
     'steps': [],
     'step_index': 0,
     'polyline': '',
-    'total_distance_text': 'N/A', # For feature: Total Route Distance
-    'total_duration_text': 'N/A'  # For feature: Total Route Duration
+    'total_distance_text': 'N/A',
+    'total_duration_text': 'N/A',
+    'travel_mode': 'driving', # New: 'driving', 'bicycling', etc.
+    'map_type': 'roadmap'     # New: 'roadmap', 'satellite', 'hybrid', 'terrain'
 }
 
 def clean_html(raw_html):
@@ -37,8 +39,9 @@ def update_route(origin, destination):
     params = {
         'origin': origin,
         'destination': destination,
-        'mode': 'driving',
-        'key': GOOGLE_MAPS_API_KEY
+        'mode': current_route.get('travel_mode', 'driving'), # Use stored travel mode
+        'key': GOOGLE_MAPS_API_KEY,
+        'alternatives': 'true' # Request alternative routes
     }
     response = requests.get(directions_url, params=params).json()
     
@@ -47,6 +50,11 @@ def update_route(origin, destination):
         return False
 
     steps = []
+    # The API returns a list of routes if alternatives=true. We'll use the first one.
+    # Future enhancement: Allow user to select from response['routes']
+    if not response.get('routes') or not response['routes']:
+        app.logger.error(f"No routes array found in Directions API response: {response}")
+        return False
     if not response.get('routes') or not response['routes'][0].get('legs'):
         app.logger.error(f"No routes or legs found in Directions API response: {response}")
         return False
@@ -83,9 +91,15 @@ def update_route(origin, destination):
 def index():
     if request.method == 'POST':
         destination = request.form.get('destination')
+        travel_mode = request.form.get('travel_mode', 'driving') # Get travel mode from form
+        map_type_preference = request.form.get('map_type', 'roadmap') # Get map type from form
+
         if not destination:
             return "Destination is required.", 400
+        
         current_route['destination'] = destination
+        current_route['travel_mode'] = travel_mode # Store travel mode
+        current_route['map_type'] = map_type_preference # Store map type
 
         if not current_route['origin']:
             return "Origin not set yet from GPS. Please wait for GPS fix.", 400
@@ -492,6 +506,24 @@ def index():
                                     <input type="text" class="form-control" id="destination" name="destination" required 
                                            placeholder="Enter destination address">
                                 </div>
+                                <div class="mb-3">
+                                    <label for="travel_mode" class="form-label">Travel Mode</label>
+                                    <select class="form-select" id="travel_mode" name="travel_mode">
+                                        <option value="driving" selected>Car</option>
+                                        <option value="bicycling">Bike</option>
+                                        <option value="walking">Walking</option>
+                                        <option value="transit">Transit</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="map_type" class="form-label">Map Type</label>
+                                    <select class="form-select" id="map_type" name="map_type">
+                                        <option value="roadmap" selected>Roadmap</option>
+                                        <option value="satellite">Satellite</option>
+                                        <option value="hybrid">Hybrid</option>
+                                        <option value="terrain">Terrain</option>
+                                    </select>
+                                </div>
                                 <button type="submit" class="btn btn-primary btn-lg w-100">
                                     <i class="fas fa-play"></i> Start Navigation
                                 </button>
@@ -662,7 +694,7 @@ def step_map(step):
         'path': f'color:0xff0000ff|weight:5|enc:{polyline}',
         'format': 'jpg-baseline',
         'key': GOOGLE_MAPS_API_KEY,
-        'maptype': 'roadmap',
+        'maptype': current_route.get('map_type', 'roadmap'), # Use stored map type
     }
     
     # Add markers for the current step, destination, and user's current location
@@ -714,7 +746,7 @@ def pan_map(step):
         'path': f'color:0xff0000ff|weight:5|enc:{current_route["polyline"]}',
         'format': 'jpg-baseline',
         'key': GOOGLE_MAPS_API_KEY,
-        'maptype': 'roadmap',
+        'maptype': current_route.get('map_type', 'roadmap'), # Use stored map type
     }
 
     # Add markers for the current step, destination, and user's current location
@@ -756,8 +788,24 @@ def current_step():
         'lat': step_data['lat'],
         'lng': step_data['lng'],
         'instruction': step_data['instruction'],
-        'total_steps': len(current_route['steps'])
+        'total_steps': len(current_route['steps']),
+        'current_origin': current_route.get('origin', 'N/A') # Added for dynamic origin display
     })
+
+@app.route('/current_step_set/<int:step_index>', methods=['GET']) # New endpoint for manual step changes
+def set_current_step(step_index):
+    if 0 <= step_index < len(current_route['steps']):
+        current_route['step_index'] = step_index
+        app.logger.info(f"User manually set step to {step_index}")
+        # Return the new current step data, similar to /current_step
+        step_data = current_route['steps'][step_index]
+        return jsonify({
+            'step_index': step_index,
+            'instruction': step_data['instruction'],
+            'current_origin': current_route.get('origin', 'N/A')
+            # Add other fields like lat, lng, total_steps if your JS in updateUIForStep needs them
+        })
+    return jsonify({'error': 'Invalid step index'}), 400
 
 @app.route('/reset')
 def reset():
@@ -766,6 +814,8 @@ def reset():
     current_route['steps'] = []
     current_route['step_index'] = 0
     current_route['polyline'] = ''
+    current_route['travel_mode'] = 'driving' # Reset to default
+    current_route['map_type'] = 'roadmap'   # Reset to default
     return "Route reset."
 
 if __name__ == '__main__':
