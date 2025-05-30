@@ -534,6 +534,10 @@ def index():
             </div>
             
             <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+            <!-- IMPORTANT: In a production environment, manage your API key more securely. 
+                 Consider passing it from the backend or using API key restrictions. -->
+            <script async defer src="https://maps.googleapis.com/maps/api/js?key={{ GOOGLE_MAPS_API_KEY }}&libraries=places&callback=initAutocomplete"></script>
+
             <script>
                 const statusEl = document.getElementById('locationStatus');
                 const statusText = document.getElementById('locationStatusText');
@@ -606,6 +610,33 @@ def index():
                         fetchFallbackLocation(); // Geolocation not supported, try fallback
                     }
                 }
+
+                // --- Destination Autocomplete Feature ---
+                let autocomplete;
+                function initAutocomplete() {
+                    const destinationInput = document.getElementById('destination');
+                    if (destinationInput) {
+                        autocomplete = new google.maps.places.Autocomplete(destinationInput, {
+                            types: ['geocode'] // You can customize types: 'address', 'establishment', '(regions)', '(cities)'
+                        });
+                        autocomplete.setFields(['address_components', 'formatted_address', 'geometry', 'name', 'place_id']);
+                        
+                        // Optional: If you want to do something when a place is selected
+                        autocomplete.addListener('place_changed', onPlaceChanged);
+                    } else {
+                        console.error("Destination input field not found for autocomplete.");
+                    }
+                }
+
+                function onPlaceChanged() {
+                    const place = autocomplete.getPlace();
+                    if (!place.geometry) {
+                        console.warn("Autocomplete: No details available for input: '" + place.name + "'");
+                    } else {
+                        console.log("Autocomplete: Place selected - ", place.formatted_address);
+                        // The input field's value is automatically updated by the widget.
+                    }
+                }
                 
                 // Start location detection when page loads
                 window.addEventListener('load', startGettingLocation);
@@ -613,7 +644,8 @@ def index():
         </body>
         </html>
     ''')
-
+    # Pass the API key to the template for the Google Maps script
+    return render_template_string(html_template, GOOGLE_MAPS_API_KEY=GOOGLE_MAPS_API_KEY)
 @app.route('/update_location', methods=['POST'])
 def update_location():
     data = request.get_json()
