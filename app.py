@@ -9,7 +9,7 @@ from geopy.distance import geodesic
 app = Flask(__name__)
 
 GOOGLE_MAPS_API_KEY = 'AIzaSyDZuZ1sMCSJSyC_u-rbzHC8BvbIyzAgL3M'
-MAP_WIDTH = 800  # Increased for better visibility like Render_Code.py
+MAP_WIDTH = 800  
 MAP_HEIGHT = 400
 
 current_route = {
@@ -521,7 +521,7 @@ def update_location():
 
     print(f"Location updated: {new_origin}")
 
-    # Check if user is close to current step (auto-advance logic from flaskapp.py)
+   
     if current_route['steps']:
         current_step = current_route['steps'][current_route['step_index']]
         step_coords = (current_step['lat'], current_step['lng'])
@@ -533,7 +533,7 @@ def update_location():
                 current_route['step_index'] += 1
                 print(f"Automatically advanced to step {current_route['step_index']}")
 
-    # Update route if origin changed (like flaskapp.py)
+    
     if current_route['destination'] and origin_changed:
         success = update_route(new_origin, current_route['destination'])
         if success:
@@ -562,9 +562,16 @@ def step_map(step):
         'format': 'jpg-baseline',
         'key': GOOGLE_MAPS_API_KEY,
         'maptype': 'roadmap',
-        'markers': f'color:blue|label:{step+1}|{lat},{lng}',
-        'markers': f'color:red|label:E|{current_route["destination"]}'
     }
+    
+    # Add markers for the current step, destination, and user's current location
+    markers = [
+        f'color:blue|label:{step+1}|{lat},{lng}',  # Current step
+        f'color:red|label:E|{current_route["destination"]}'  # Destination
+    ]
+    if current_route['origin']:
+        markers.append(f'color:green|label:U|{current_route["origin"]}') # User's current location
+    params['markers'] = markers
 
     response = requests.get(base_url, params=params)
     if response.status_code != 200:
@@ -606,9 +613,16 @@ def pan_map(step):
         'format': 'jpg-baseline',
         'key': GOOGLE_MAPS_API_KEY,
         'maptype': 'roadmap',
-        'markers': f'color:blue|label:{step+1}|{lat},{lng}',
-        'markers': f'color:red|label:E|{current_route["destination"]}'
     }
+
+    # Add markers for the current step, destination, and user's current location
+    markers = [
+        f'color:blue|label:{step+1}|{lat},{lng}',  # Current step
+        f'color:red|label:E|{current_route["destination"]}'  # Destination
+    ]
+    if current_route['origin']:
+        markers.append(f'color:green|label:U|{current_route["origin"]}') # User's current location
+    params['markers'] = markers
 
     response = requests.get(base_url, params=params)
     if response.status_code != 200:
