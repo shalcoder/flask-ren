@@ -28,8 +28,9 @@ current_route = {
     'polyline': '',
     'total_distance_text': 'N/A',
     'total_duration_text': 'N/A',
-   
-    'map_type': 'roadmap'     # New: 'roadmap', 'satellite', 'hybrid', 'terrain'
+    'map_type': 'roadmap',
+    'user_current_lat': None,  # NEW: Track user's real-time location
+    'user_current_lng': None   # NEW: Track user's real-time location
 }
 
 def clean_html(raw_html):
@@ -334,6 +335,7 @@ def index():
                                             document.getElementById('stepInstruction').textContent = data.instruction;
                                         }
 
+                                        // FIXED: Force map refresh to show user-centered view
                                         document.getElementById('mapImage').src = `/map/${data.step_index}?t=${new Date().getTime()}`;
                                         
                                         updateProgress();
@@ -669,6 +671,7 @@ def index():
                         // You could also store place.place_id in a hidden field if your backend needs it.
                     }
                 }
+                
                 
                 // Start location detection when page loads
                 window.addEventListener('load', startGettingLocation);
