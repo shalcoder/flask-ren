@@ -6,16 +6,14 @@ import socket
 import re
 from geopy.distance import geodesic
 import logging
-import os  # For environment variables
+import os
 
 app = Flask(__name__)
 
-# Load API key from environment variable for security and flexibility
 GOOGLE_MAPS_API_KEY = 'AIzaSyDZuZ1sMCSJSyC_u-rbzHC8BvbIyzAgL3M'
 MAP_WIDTH = 800  
 MAP_HEIGHT = 400
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 app.logger.setLevel(logging.INFO)
 
@@ -27,7 +25,8 @@ current_route = {
     'polyline': '',
     'total_distance_text': 'N/A',
     'total_duration_text': 'N/A',
-    'map_type': 'roadmap'  # New: 'roadmap', 'satellite', 'hybrid', 'terrain'
+    'map_type': 'roadmap',
+    'user_current_location': None
 }
 
 def clean_html(raw_html):
@@ -39,15 +38,15 @@ def update_route(origin, destination):
     params = {
         'origin': origin,
         'destination': destination,
-        'mode': 'driving',  # Hardcode to driving
+        'mode': 'driving',
         'key': GOOGLE_MAPS_API_KEY,
-        'alternatives': 'true'  # Request alternative routes
+        'alternatives': 'true'
     }
     app.logger.info(f"Requesting directions from {origin} to {destination} with mode: {params['mode']}")
     response = requests.get(directions_url, params=params).json()
     
     if response.get('status') != 'OK':
-        current_route['last_directions_error_status'] = response.get('status')  # Store error status
+        current_route['last_directions_error_status'] = response.get('status')
         app.logger.error(f"Failed to fetch directions. Status: {response.get('status')}. Mode: {params['mode']}. Response: {response}")
         return False
 
@@ -90,13 +89,13 @@ def update_route(origin, destination):
 def index():
     if request.method == 'POST':
         destination = request.form.get('destination')
-        map_type_preference = request.form.get('map_type', 'roadmap')  # Get map type from form
+        map_type_preference = request.form.get('map_type', 'roadmap')
 
         if not destination:
             return "Destination is required.", 400
         
         current_route['destination'] = destination
-        current_route['map_type'] = map_type_preference  # Store map type
+        current_route['map_type'] = map_type_preference
 
         if not current_route['origin']:
             return "Origin not set yet from GPS. Please wait for GPS fix.", 400
@@ -176,7 +175,7 @@ def index():
                         position: absolute;
                         top: 10px;
                         right: 10px;
-                        background: rgba(13, 110, 253, 0.9); /* Bootstrap primary with alpha */
+                        background: rgba(13, 110, 253, 0.9);
                         color: white;
                         padding: 5px 10px;
                         border-radius: 15px;
@@ -193,6 +192,7 @@ def index():
                         50% { opacity: 0.5; }
                         100% { opacity: 1; }
                     }
+
                     @media (max-width: 768px) {
                         .container {
                             padding: 0 15px;
@@ -218,7 +218,8 @@ def index():
                         <div class="col-lg-8">
                             <div class="map-container">
                                 <div class="live-update-indicator"><i class="fas fa-satellite-dish pulse"></i> Live Tracking</div>
-                                <img id="mapImage" src="/map/0" alt="Step 1 Map" class="map-img" onclick="handleMapClick(event)">
+                                <img id="mapImage" src="/map/0" alt="Step 1 Map" class="map-img" 
+                                     onclick="handleMapClick(event)">
                             </div>
                         </div>
                         <div class="col-lg-4">
@@ -306,11 +307,23 @@ def index():
                                         currentStep = data.step_index;
                                         document.getElementById('originDisplay').textContent = data.current_origin || 'Updating...';
                                         document.getElementById('currentStepNum').textContent = data.step_index + 1;
-                                        document.getElementById('stepInstruction').textContent = data.instruction;
-                                        document.getElementById('mapImage').src = `/map_recenter/${data.step_index}?t=${new Date().getTime()}`;
+                                        
+                                        if (data.step_index === totalSteps - 1 && totalSteps > 0) {
+                                            document.getElementById('stepInstruction').innerHTML = 
+                                                `<strong>You have arrived at your destination!</strong><br>${data.instruction}`;
+                                            if (trackingInterval) clearInterval(trackingInterval); 
+                                            if (watchId && navigator.geolocation) navigator.geolocation.clearWatch(watchId);
+                                        } else {
+                                            document.getElementById('stepInstruction').textContent = data.instruction;
+                                        }
+
+                                        document.getElementById('mapImage').src = `/map/${data.step_index}?t=${new Date().getTime()}`;
+                                        
                                         updateProgress();
+                                        
                                         document.getElementById('prevStep').disabled = data.step_index === 0;
                                         document.getElementById('nextStep').disabled = data.step_index === totalSteps - 1;
+                                        
                                         fetchStepDetails(data.step_index);
                                     }
                                 })
@@ -339,7 +352,7 @@ def index():
                     function nextStep() {
                         if (currentStep < totalSteps - 1) {
                             currentStep++;
-                            updateUIForStep(currentStep);
+                            updateUIForStep(currentStep); 
                         }
                     }
                     
@@ -357,10 +370,12 @@ def index():
                                 if (!data.error) {
                                     document.getElementById('currentStepNum').textContent = data.step_index + 1;
                                     document.getElementById('stepInstruction').textContent = data.instruction;
-                                    document.getElementById('mapImage').src = `/map_recenter/${data.step_index}?t=${new Date().getTime()}`;
+                                    document.getElementById('mapImage').src = `/map/${data.step_index}?t=${new Date().getTime()}`;
                                     updateProgress();
+                                    
                                     document.getElementById('prevStep').disabled = data.step_index === 0;
                                     document.getElementById('nextStep').disabled = data.step_index === totalSteps - 1;
+                                    
                                     fetchStepDetails(data.step_index);
                                 }
                             })
@@ -387,6 +402,10 @@ def index():
                     
                     function recenterMap() {
                         const mapImage = document.getElementById('mapImage');
+                        if (typeof currentStep === 'undefined' || currentStep < 0) {
+                            console.warn("Current step not defined for recentering.");
+                            return;
+                        }
                         fetch(`/map_recenter/${currentStep}?t=${new Date().getTime()}`)
                             .then(response => {
                                 if (!response.ok) {
@@ -492,7 +511,8 @@ def index():
                             <form method="POST">
                                 <div class="mb-3">
                                     <label for="destination" class="form-label">Destination Address</label>
-                                    <input type="text" class="form-control" id="destination" name="destination" required placeholder="Enter destination address">
+                                    <input type="text" class="form-control" id="destination" name="destination" required 
+                                           placeholder="Enter destination address">
                                 </div>
                                 <div class="mb-3">
                                     <label for="map_type" class="form-label">Map Type</label>
@@ -530,9 +550,11 @@ def index():
                             method: method
                         })
                     }).then(res => res.json()).then(data => {
-                        if (method === 'browser_gps_watch') return;
+                        if (method === 'browser_gps_watch') return; 
+                        
                         statusEl.classList.add('active');
-                        statusEl.innerHTML = `<i class="fas fa-check-circle location-icon"></i> Location detected via ${method.replace(/_/g, ' ')} (Accuracy: ${accuracy ? accuracy.toFixed(0) : 'N/A'}m)`;
+                        statusEl.innerHTML = `<i class="fas fa-check-circle location-icon"></i> 
+                            Location detected via ${method.replace(/_/g, ' ')} (Accuracy: ${accuracy ? accuracy.toFixed(0) : 'N/A'}m)`;
                         console.log(`Location sent to server: ${lat},${lng}, Accuracy: ${accuracy}m, Method: ${method}`);
                     }).catch(err => {
                         statusText.textContent = 'Failed to send location to server.';
@@ -548,7 +570,8 @@ def index():
                             if (data.lat && data.lng) {
                                 sendLocationToServer(data.lat, data.lng, data.accuracy, "google_api_fallback");
                             } else {
-                                statusText.textContent = 'Could not detect precise location using fallback. Navigation may be less accurate.';
+                                statusText.textContent = 
+                                    'Could not detect precise location using fallback. Navigation may be less accurate.';
                                 console.warn('Fallback location did not return coordinates:', data.error);
                             }
                         })
@@ -567,7 +590,8 @@ def index():
                                     console.log(`Initial GPS accuracy poor (${accuracy}m), attempting fallback.`);
                                     fetchFallbackLocation();
                                 } else {
-                                    sendLocationToServer(pos.coords.latitude, pos.coords.longitude, accuracy, "browser_gps_initial");
+                                    sendLocationToServer(pos.coords.latitude, pos.coords.longitude, 
+                                                accuracy, "browser_gps_initial");
                                 }
                             },
                             err => {
@@ -590,6 +614,7 @@ def index():
                             types: ['geocode']
                         });
                         autocomplete.setFields(['address_components', 'formatted_address', 'geometry', 'name', 'place_id']);
+                        
                         autocomplete.addListener('place_changed', onPlaceChanged);
                     } else {
                         console.error("Destination input field not found for autocomplete.");
@@ -599,6 +624,7 @@ def index():
                 function onPlaceChanged() {
                     const place = autocomplete.getPlace();
                     const destinationInput = document.getElementById('destination');
+
                     if (!place.geometry) {
                         console.warn("Autocomplete: No geometry available for input: '" + (place.name || destinationInput.value) + "'. User's raw input will be used.");
                     } else {
@@ -627,6 +653,7 @@ def update_location():
     new_origin = f"{lat},{lng}"
     origin_changed = (current_route['origin'] != new_origin)
     current_route['origin'] = new_origin
+    current_route['user_current_location'] = {'lat': lat, 'lng': lng}
 
     app.logger.info(f"[{method.upper()}] Location: {new_origin} (Accuracy: {accuracy}m)")
 
@@ -649,13 +676,6 @@ def update_location():
             app.logger.info("Route updated dynamically with new origin.")
         else:
             app.logger.error("Failed to update route dynamically.")
-
-    try:
-        recenter_response = requests.get(f"http://{request.host}/map_recenter/{current_route['step_index']}")
-        if recenter_response.status_code != 200:
-            app.logger.error(f"Failed to recenter map: {recenter_response.content}")
-    except Exception as e:
-        app.logger.error(f"Error recentering map: {e}")
 
     return jsonify({'status': 'Location updated', 'method': method}), 200
 
@@ -697,15 +717,16 @@ def step_map(step):
         'path': f'color:0xff0000ff|weight:5|enc:{polyline}',
         'format': 'jpg-baseline',
         'key': GOOGLE_MAPS_API_KEY,
-        'maptype': current_route.get('map_type', 'roadmap'),
+        'maptype': current_route.get('map_type', 'roadmap'), # Use stored map type
     }
     
+    # Add markers for the current step, destination, and user's current location
     markers = [
-        f'color:blue|label:{step+1}|{lat},{lng}',
-        f'color:red|label:E|{current_route["destination"]}'
+        f'color:blue|label:{step+1}|{lat},{lng}',  # Current step
+        f'color:red|label:E|{current_route["destination"]}'  # Destination
     ]
     if current_route['origin']:
-        markers.append(f'color:green|label:U|{current_route["origin"]}')
+        markers.append(f'color:green|label:U|{current_route["origin"]}') # User's current location
     params['markers'] = markers
 
     response = requests.get(base_url, params=params)
@@ -720,16 +741,20 @@ def pan_map(step):
     if step < 0 or step >= len(current_route['steps']):
         return "No such step", 404
 
+    # Get click position percentages
     x_percent = float(request.args.get('x', 50))
     y_percent = float(request.args.get('y', 50))
     
-    x_offset = (x_percent - 50) / 50
-    y_offset = (y_percent - 50) / 50
+    # Calculate the offset from center (50%, 50%)
+    x_offset = (x_percent - 50) / 50  # -1 to 1
+    y_offset = (y_percent - 50) / 50  # -1 to 1
     
+   # Adjust the center based on click position
     location = current_route['steps'][step]
     lat = location['lat']
     lng = location['lng']
     
+    # Simple approximation for panning
     lat_adjust = 0.02 * y_offset
     lng_adjust = 0.02 * x_offset
     
@@ -744,15 +769,16 @@ def pan_map(step):
         'path': f'color:0xff0000ff|weight:5|enc:{current_route["polyline"]}',
         'format': 'jpg-baseline',
         'key': GOOGLE_MAPS_API_KEY,
-        'maptype': current_route.get('map_type', 'roadmap'),
+        'maptype': current_route.get('map_type', 'roadmap'), # Use stored map type
     }
 
+    # Add markers for the current step, destination, and user's current location
     markers = [
-        f'color:blue|label:{step+1}|{lat},{lng}',
-        f'color:red|label:E|{current_route["destination"]}'
+        f'color:blue|label:{step+1}|{lat},{lng}',  # Current step
+        f'color:red|label:E|{current_route["destination"]}'  # Destination
     ]
     if current_route['origin']:
-        markers.append(f'color:green|label:U|{current_route["origin"]}')
+        markers.append(f'color:green|label:U|{current_route["origin"]}') # User's current location
     params['markers'] = markers
 
     response = requests.get(base_url, params=params)
@@ -768,15 +794,23 @@ def map_recenter(step_index):
         app.logger.warn("Re-center map called but no origin is set.")
         return "User origin not available to re-center.", 404
 
-    user_current_location_str = current_route['origin']
+    # It's good to have route context, but re-centering should primarily focus on user's location.
+    # If steps are not available, we might still want to show the user on the map.
+    # For now, we'll assume steps exist to draw the polyline and step markers.
+    if not current_route['steps'] or step_index < 0 or step_index >= len(current_route['steps']):
+        app.logger.warn(f"Re-center map called for step {step_index}, but route/step context is invalid or unavailable.")
+        # Fallback: could generate a map with just user location if no route, but for now require route.
+        return "Route context not available for recentering.", 404
+
+    user_current_location_str = current_route['origin'] # This is "lat,lng"
     polyline = current_route['polyline']
     current_step_details = current_route['steps'][step_index]
 
     base_url = "https://maps.googleapis.com/maps/api/staticmap"
     params = {
         'size': f'{MAP_WIDTH}x{MAP_HEIGHT}',
-        'zoom': '16',
-        'center': user_current_location_str,
+        'zoom': '16', # A good zoom level for "you are here"
+        'center': user_current_location_str, # Center on the user's current location
         'path': f'color:0xff0000ff|weight:5|enc:{polyline}',
         'format': 'jpg-baseline',
         'key': GOOGLE_MAPS_API_KEY,
@@ -784,15 +818,16 @@ def map_recenter(step_index):
     }
 
     markers = [
-        f'color:blue|label:{step_index+1}|{current_step_details["lat"]},{current_step_details["lng"]}',
-        f'color:red|label:E|{current_route["destination"]}',
+        f'color:blue|label:{step_index+1}|{current_step_details["lat"]},{current_step_details["lng"]}', # Current navigation step
+        f'color:red|label:E|{current_route["destination"]}', # Destination
+        # Add a distinct marker for the user's actual current location (map center)
         f'icon:https://maps.google.com/mapfiles/ms/icons/blue-dot.png|{user_current_location_str}'
     ]
     params['markers'] = markers
 
     try:
         response = requests.get(base_url, params=params)
-        response.raise_for_status()
+        response.raise_for_status() 
         return send_file(io.BytesIO(response.content), mimetype='image/jpeg')
     except requests.exceptions.RequestException as e:
         app.logger.error(f"Failed to fetch recentered map image. Error: {e}. Params: {params}")
@@ -822,19 +857,21 @@ def current_step():
         'lng': step_data['lng'],
         'instruction': step_data['instruction'],
         'total_steps': len(current_route['steps']),
-        'current_origin': current_route.get('origin', 'N/A')
+        'current_origin': current_route.get('origin', 'N/A') # Added for dynamic origin display
     })
 
-@app.route('/current_step_set/<int:step_index>', methods=['GET'])
+@app.route('/current_step_set/<int:step_index>', methods=['GET']) # New endpoint for manual step changes
 def set_current_step(step_index):
     if 0 <= step_index < len(current_route['steps']):
         current_route['step_index'] = step_index
         app.logger.info(f"User manually set step to {step_index}")
+        # Return the new current step data, similar to /current_step
         step_data = current_route['steps'][step_index]
         return jsonify({
             'step_index': step_index,
             'instruction': step_data['instruction'],
             'current_origin': current_route.get('origin', 'N/A')
+            # Add other fields like lat, lng, total_steps if your JS in updateUIForStep needs them
         })
     return jsonify({'error': 'Invalid step index'}), 400
 
@@ -845,7 +882,7 @@ def reset():
     current_route['steps'] = []
     current_route['step_index'] = 0
     current_route['polyline'] = ''
-    current_route['map_type'] = 'roadmap'
+    current_route['map_type'] = 'roadmap'   # Reset to default
     return "Route reset."
 
 if __name__ == '__main__':
